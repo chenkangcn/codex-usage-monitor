@@ -1,8 +1,8 @@
 # Codex 五小时用量监控器 / Codex Five-Hour Usage Monitor (macOS)
 
-一个无第三方依赖的本地 Node.js 小工具。它从 Codex 本地 JSONL 事件中寻找最新的五小时（300 分钟）限额记录，生成稳定的状态 JSON，并在用量每跨过 10% 时发送 macOS 系统通知。
+一个无第三方依赖的本地 Node.js 小工具。它从 Codex 本地 JSONL 事件中寻找最新的五小时（300 分钟）限额记录，生成稳定的状态 JSON，并在用量每跨过 10% 时显示可手动关闭的 macOS 原生提醒气泡。
 
-A dependency-free local Node.js utility. It finds the latest five-hour (300-minute) rate-limit record in Codex's local JSONL events, writes a stable JSON status file, and sends a macOS system notification whenever usage crosses another 10% milestone.
+A dependency-free local Node.js utility. It finds the latest five-hour (300-minute) rate-limit record in Codex's local JSONL events, writes a stable JSON status file, and shows a dismissible native macOS alert bubble whenever usage crosses another 10% milestone.
 
 它不调用 OpenAI API，也不会消耗 Codex 用量。扫描时先用 `rate_limits` 文本预筛，只解析 `event_msg/token_count` 事件；不会保存或输出提示词、回复或其他会话正文。
 
@@ -16,6 +16,8 @@ It does not call the OpenAI API or consume Codex usage. The scanner first prefil
   If one check jumps across several milestones, only the current highest milestone is reported to avoid notification spam.
 - 剩余 `< 20%`（即使用量 `> 80%`）时进入 `severe` 并显示严重警告；剩余 `< 10%`（即使用量 `> 90%`）时进入 `critical` 并显示紧急警告。边界值 20% 和 10% 分别仍属于前一级。  
   When remaining allowance is `< 20%` (usage `> 80%`), status becomes `severe`; below `10%` (usage `> 90%`), it becomes `critical`. Exact boundary values of 20% and 10% remain in the preceding level.
+- 普通气泡显示 5 秒，严重气泡显示 20 秒，两者均可提前手动关闭；紧急气泡保持显示，直到用户关闭。
+  Ordinary bubbles remain for 5 seconds and severe bubbles for 20 seconds; both can be dismissed early. Critical bubbles remain until manually dismissed.
 - 去重窗口键是 `resets_at`。新窗口出现后会重新允许各个里程碑通知。  
   The deduplication window key is `resets_at`. Every milestone becomes eligible again in a new window.
 - 已过期、缺失或无效的记录产生 `no_data`，不会通知。  
@@ -47,9 +49,9 @@ The status is written to `~/.codex/usage-monitor/state.json`, readable and writa
 
 ## 命令 / Commands
 
-要求本机 Node 位于 `/opt/homebrew/opt/node@22/bin/node`。
+要求本机 Node 位于 `/opt/homebrew/opt/node@22/bin/node`，并安装 Apple Command Line Tools，以便安装时编译原生提醒 Helper。
 
-Node is expected at `/opt/homebrew/opt/node@22/bin/node`.
+Node is expected at `/opt/homebrew/opt/node@22/bin/node`. Apple Command Line Tools are also required so the native alert helper can be compiled during installation.
 
 运行测试、执行一次检查、查看状态：
 
@@ -59,6 +61,7 @@ Run the tests, perform a one-time check, and inspect the current status:
 npm test
 npm run run-once
 /opt/homebrew/opt/node@22/bin/node bin/codex-usage-monitor.js status
+/opt/homebrew/opt/node@22/bin/node bin/codex-usage-monitor.js test-alert ok
 ```
 
 安装 LaunchAgent。执行后会立即加载，并默认每 3 分钟运行一次：
@@ -77,9 +80,9 @@ Stop and uninstall:
 /opt/homebrew/opt/node@22/bin/node bin/codex-usage-monitor.js uninstall
 ```
 
-安装会创建 `~/Library/LaunchAgents/com.local.codex-usage-monitor.plist`。LaunchAgent 使用固定参数直接启动 Node，不经过 shell。通知内容通过 `osascript` 的 argv 传递，不会拼接到 AppleScript 源码中。
+安装会创建 `~/Library/LaunchAgents/com.local.codex-usage-monitor.plist`，并将按需运行的原生 Helper 编译到 `~/.codex/usage-monitor/bin/codex-usage-alert`。安装优先编译单文件 Swift/AppKit 实现；如果本机 Command Line Tools 的 Swift 编译器与 SDK 补丁版本不匹配，会自动编译等价的 Objective-C/AppKit 兼容实现。LaunchAgent 使用固定参数直接启动 Node，不经过 shell，动态文本只作为独立 argv 传递。
 
-Installation creates `~/Library/LaunchAgents/com.local.codex-usage-monitor.plist`. The LaunchAgent starts Node directly with fixed arguments and does not invoke a shell. Notification text is passed through `osascript` argv rather than interpolated into AppleScript source.
+Installation creates `~/Library/LaunchAgents/com.local.codex-usage-monitor.plist` and compiles the on-demand native helper to `~/.codex/usage-monitor/bin/codex-usage-alert`. It prefers the single-file Swift/AppKit implementation and automatically builds an equivalent Objective-C/AppKit compatibility implementation if the installed Command Line Tools contain mismatched Swift compiler and SDK patch versions. The LaunchAgent starts Node directly with fixed arguments and does not invoke a shell; dynamic text is passed only as separate argv values.
 
 ## 配置 / Configuration
 
@@ -102,9 +105,9 @@ The optional configuration file is `~/.codex/usage-monitor/config.json`:
 
 ## 权限与排错 / Permissions and Troubleshooting
 
-首次通知时，macOS 可能要求允许通知；请在“系统设置 → 通知”中检查 `osascript` 或脚本宿主的通知权限。工具以当前登录用户运行，通常可直接读取同一用户的 `~/.codex`。如果系统隐私设置阻止访问，请在“隐私与安全性”中为实际运行它的终端或宿主授权。
+原生气泡是 Helper 自己的浮动窗口，不依赖通知中心权限或横幅停留设置。工具以当前登录用户运行，通常可直接读取同一用户的 `~/.codex`。如果系统隐私设置阻止访问，请在“隐私与安全性”中为实际运行它的终端或宿主授权。
 
-macOS may request notification permission the first time a notification is sent. Check the notification settings for `osascript` or the script host under System Settings → Notifications. The utility runs as the current user and can normally read that user's `~/.codex`. If macOS privacy controls block access, grant the required permission to the terminal or host that actually runs it under Privacy & Security.
+The native bubble is the helper's own floating window, so it does not depend on Notification Center permission or banner-duration settings. The utility runs as the current user and can normally read that user's `~/.codex`. If macOS privacy controls block access, grant the required permission to the terminal or host that actually runs it under Privacy & Security.
 
 常用检查命令 / Useful diagnostic commands:
 
@@ -128,6 +131,7 @@ Automatic LaunchAgent runs use `--quiet`, so successful checks do not write log 
 | 内部通知去重 / Internal notification deduplication | `~/.codex/usage-monitor/.notification-state.json` |
 | 可选配置 / Optional configuration | `~/.codex/usage-monitor/config.json` |
 | 错误日志 / Error log | `~/.codex/usage-monitor/monitor.log` |
+| 原生提醒 Helper / Native alert helper | `~/.codex/usage-monitor/bin/codex-usage-alert` |
 | LaunchAgent | `~/Library/LaunchAgents/com.local.codex-usage-monitor.plist` |
 
 工具不会联网，不会调用 OpenAI API，也不会把会话正文写入状态或日志。内部去重文件只保存重置时间和已通知的用量里程碑。
