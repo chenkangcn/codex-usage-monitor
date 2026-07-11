@@ -1,0 +1,16 @@
+{
+  "name": "codex-usage-monitor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "codex-usage-monitor": "bin/codex-usage-monitor.js"
+  },
+  "scripts": {
+    "test": "/opt/homebrew/opt/node@22/bin/node --test",
+    "run-once": "/opt/homebrew/opt/node@22/bin/node bin/codex-usage-monitor.js run-once"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
