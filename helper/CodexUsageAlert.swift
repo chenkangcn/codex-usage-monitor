@@ -5,6 +5,7 @@ private struct AlertOptions {
     let title: String
     let message: String
     let duration: TimeInterval
+    let isChinese: Bool
 
     static func parse(_ arguments: [String]) -> AlertOptions? {
         var values: [String: String] = [:]
@@ -17,8 +18,12 @@ private struct AlertOptions {
                 index += 1
             }
         }
-        guard let title = values["--title"],
-              let message = values["--message"],
+        let isChinese = (Locale.preferredLanguages.first ?? "en")
+            .lowercased().hasPrefix("zh")
+        let titleKey = isChinese ? "--title-zh" : "--title-en"
+        let messageKey = isChinese ? "--message-zh" : "--message-en"
+        guard let title = values[titleKey],
+              let message = values[messageKey],
               let durationText = values["--duration"],
               let duration = TimeInterval(durationText), duration >= 0 else {
             return nil
@@ -27,7 +32,8 @@ private struct AlertOptions {
             level: values["--level"] ?? "ok",
             title: title,
             message: message,
-            duration: duration
+            duration: duration,
+            isChinese: isChinese
         )
     }
 }
@@ -80,12 +86,20 @@ private final class AlertController: NSObject, NSApplicationDelegate, NSWindowDe
         message.lineBreakMode = .byWordWrapping
 
         let timing = NSTextField(labelWithString: options.duration > 0
-            ? "\(Int(options.duration)) 秒后自动关闭"
-            : "请手动关闭此紧急提醒")
+            ? (options.isChinese
+                ? "\(Int(options.duration)) 秒后自动关闭"
+                : "Closes automatically in \(Int(options.duration)) seconds")
+            : (options.isChinese
+                ? "请手动关闭此紧急提醒"
+                : "Please dismiss this critical alert manually"))
         timing.font = .systemFont(ofSize: 11)
         timing.textColor = .secondaryLabelColor
 
-        let closeButton = NSButton(title: "关闭", target: self, action: #selector(closeAlert))
+        let closeButton = NSButton(
+            title: options.isChinese ? "关闭" : "Dismiss",
+            target: self,
+            action: #selector(closeAlert)
+        )
         closeButton.bezelStyle = .rounded
         closeButton.keyEquivalent = "\u{1b}"
 

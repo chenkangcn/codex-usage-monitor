@@ -22,6 +22,10 @@
 }
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
+    NSString *preferredLanguage = NSLocale.preferredLanguages.firstObject ?: @"en";
+    BOOL isChinese = [preferredLanguage.lowercaseString hasPrefix:@"zh"];
+    NSString *titleText = self.options[isChinese ? @"--title-zh" : @"--title-en"];
+    NSString *messageText = self.options[isChinese ? @"--message-zh" : @"--message-en"];
     NSRect rect = NSMakeRect(0, 0, 420, 168);
     self.panel = [[NSPanel alloc] initWithContentRect:rect
                                             styleMask:NSWindowStyleMaskTitled |
@@ -52,24 +56,31 @@
     background.layer.borderColor = self.accentColor.CGColor;
     self.panel.contentView = background;
 
-    NSTextField *title = [NSTextField labelWithString:self.options[@"--title"]];
+    NSTextField *title = [NSTextField labelWithString:titleText];
     title.font = [NSFont systemFontOfSize:17 weight:NSFontWeightSemibold];
     title.textColor = self.accentColor;
 
-    NSTextField *message = [NSTextField wrappingLabelWithString:self.options[@"--message"]];
+    NSTextField *message = [NSTextField wrappingLabelWithString:messageText];
     message.font = [NSFont systemFontOfSize:13];
     message.maximumNumberOfLines = 3;
     message.lineBreakMode = NSLineBreakByWordWrapping;
 
     NSTimeInterval duration = [self.options[@"--duration"] doubleValue];
-    NSString *timingText = duration > 0
-        ? [NSString stringWithFormat:@"%ld 秒后自动关闭", (long)duration]
-        : @"请手动关闭此紧急提醒";
+    NSString *timingText;
+    if (duration > 0) {
+        timingText = isChinese
+            ? [NSString stringWithFormat:@"%ld 秒后自动关闭", (long)duration]
+            : [NSString stringWithFormat:@"Closes automatically in %ld seconds", (long)duration];
+    } else {
+        timingText = isChinese
+            ? @"请手动关闭此紧急提醒"
+            : @"Please dismiss this critical alert manually";
+    }
     NSTextField *timing = [NSTextField labelWithString:timingText];
     timing.font = [NSFont systemFontOfSize:11];
     timing.textColor = NSColor.secondaryLabelColor;
 
-    NSButton *closeButton = [NSButton buttonWithTitle:@"关闭"
+    NSButton *closeButton = [NSButton buttonWithTitle:(isChinese ? @"关闭" : @"Dismiss")
                                                target:self
                                                action:@selector(closeAlert:)];
     closeButton.bezelStyle = NSBezelStyleRounded;
@@ -133,7 +144,9 @@ static NSDictionary<NSString *, NSString *> *ParseOptions(int argc, const char *
         NSString *value = [NSString stringWithUTF8String:argv[index + 1]];
         if ([key hasPrefix:@"--"] && value) values[key] = value;
     }
-    if (!values[@"--title"] || !values[@"--message"] || !values[@"--duration"]) return nil;
+    if (!values[@"--title-zh"] || !values[@"--message-zh"] ||
+        !values[@"--title-en"] || !values[@"--message-en"] ||
+        !values[@"--duration"]) return nil;
     return values;
 }
 
