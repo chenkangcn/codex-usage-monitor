@@ -34,22 +34,29 @@ export function parseRateLimitLine(line, source = {}) {
   }
   if (event?.type !== 'event_msg' || event?.payload?.type !== 'token_count') return null;
   const rateLimits = rateLimitsFromEvent(event);
-  const primary = rateLimits?.primary;
-  if (!primary || typeof primary !== 'object') return null;
+  if (!rateLimits) return null;
+  const eventAt = asDate(event.timestamp ?? event.created_at ?? event.time) ?? source.mtime;
+  if (!eventAt) return null;
 
-  const usedPercent = Number(primary.used_percent);
-  const windowMinutes = Number(primary.window_minutes);
-  const resetsAt = asDate(primary.resets_at);
-  if (!Number.isFinite(usedPercent) || !Number.isFinite(windowMinutes) || !resetsAt) return null;
-
-  const eventAt = asDate(event.timestamp ?? event.created_at ?? event.time) ?? source.mtime ?? resetsAt;
-  return {
-    usedPercent: Math.max(0, Math.min(100, usedPercent)),
-    windowMinutes,
-    resetsAt,
-    eventAt,
-    sourceUpdatedAt: eventAt,
-  };
+  const limits = [];
+  const seenWindows = new Set();
+  for (const raw of [rateLimits.primary, rateLimits.secondary]) {
+    if (!raw || typeof raw !== 'object') continue;
+    const usedPercent = Number(raw.used_percent);
+    const windowMinutes = Number(raw.window_minutes);
+    const resetsAt = asDate(raw.resets_at);
+    if (!Number.isFinite(usedPercent) || !Number.isFinite(windowMinutes) || !resetsAt) continue;
+    if (seenWindows.has(windowMinutes)) continue;
+    seenWindows.add(windowMinutes);
+    limits.push({
+      usedPercent: Math.max(0, Math.min(100, usedPercent)),
+      windowMinutes,
+      resetsAt,
+      eventAt,
+      sourceUpdatedAt: eventAt,
+    });
+  }
+  return limits.length > 0 ? { eventAt, sourceUpdatedAt: eventAt, limits } : null;
 }
 
 async function findJsonlFiles(dir) {
@@ -75,8 +82,12 @@ async function findJsonlFiles(dir) {
   return results;
 }
 
-export async function latestRateLimitInFile(file, options = {}) {
+export async function latestRateLimitsInFile(file, options = {}) {
   const chunkSize = options.chunkSize ?? 64 * 1024;
+  const targets = options.windowMinutes ?? [300, 10080];
+  const targetSet = new Set(targets);
+  const now = options.now ?? new Date();
+  const found = {};
   const handle = await fs.open(file.path, 'r');
   let position = file.size;
   let suffix = '';
@@ -90,24 +101,62 @@ export async function latestRateLimitInFile(file, options = {}) {
       suffix = parts.shift() ?? '';
       for (let index = parts.length - 1; index >= 0; index -= 1) {
         const parsed = parseRateLimitLine(parts[index], file);
-        if (parsed && parsed.windowMinutes === (options.targetWindowMinutes ?? 300)) return parsed;
+        if (!parsed) continue;
+        for (const limit of parsed.limits) {
+          if (targetSet.has(limit.windowMinutes) && !found[limit.windowMinutes] && limit.resetsAt > now) {
+            found[limit.windowMinutes] = limit;
+          }
+        }
+        const unresolved = targets.filter((minutes) => !found[minutes]);
+        if (unresolved.length === 0) return found;
+        if (unresolved.every((minutes) => parsed.eventAt <= new Date(now.valueOf() - minutes * 60_000))) {
+          return found;
+        }
       }
     }
     const first = parseRateLimitLine(suffix, file);
-    return first?.windowMinutes === (options.targetWindowMinutes ?? 300) ? first : null;
+    if (first) {
+      for (const limit of first.limits) {
+        if (targetSet.has(limit.windowMinutes) && !found[limit.windowMinutes] && limit.resetsAt > now) {
+          found[limit.windowMinutes] = limit;
+        }
+      }
+    }
+    return found;
   } finally {
     await handle.close();
   }
 }
 
-export async function findLatestRateLimit(sessionDirs, options = {}) {
+export async function findLatestRateLimits(sessionDirs, options = {}) {
   const nested = await Promise.all(sessionDirs.map(findJsonlFiles));
   const files = nested.flat().sort((a, b) => b.mtime - a.mtime);
-  let latest = null;
+  const targets = options.windowMinutes ?? [300, 10080];
+  const now = options.now ?? new Date();
+  const latest = {};
   for (const file of files) {
-    if (latest && file.mtime <= latest.eventAt) break;
-    const candidate = await latestRateLimitInFile(file, options);
-    if (candidate && (!latest || candidate.eventAt > latest.eventAt)) latest = candidate;
+    const needed = targets.filter((minutes) => {
+      if (file.mtime <= new Date(now.valueOf() - minutes * 60_000)) return false;
+      return !latest[minutes] || file.mtime > latest[minutes].eventAt;
+    });
+    if (needed.length === 0) continue;
+    const candidates = await latestRateLimitsInFile(file, { ...options, windowMinutes: needed, now });
+    for (const minutes of needed) {
+      const candidate = candidates[minutes];
+      if (candidate && (!latest[minutes] || candidate.eventAt > latest[minutes].eventAt)) {
+        latest[minutes] = candidate;
+      }
+    }
   }
   return latest;
+}
+
+// Backward-compatible five-hour lookup for existing local callers.
+export async function findLatestRateLimit(sessionDirs, options = {}) {
+  const minutes = options.targetWindowMinutes ?? 300;
+  const limits = await findLatestRateLimits(sessionDirs, {
+    ...options,
+    windowMinutes: [minutes],
+  });
+  return limits[minutes] ?? null;
 }

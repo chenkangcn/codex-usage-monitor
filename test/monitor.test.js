@@ -7,10 +7,10 @@ import { classifyUsage, notificationDecision, runMonitor } from '../src/monitor.
 
 const thresholds = { alertStepPercent: 10, severeThreshold: 80, criticalThreshold: 90 };
 
-function event(usedPercent, reset = '2026-07-11T10:00:00Z') {
+function event(usedPercent, reset = '2026-07-11T10:00:00Z', windowMinutes = 300) {
   return {
     usedPercent,
-    windowMinutes: 300,
+    windowMinutes,
     resetsAt: new Date(reset),
     eventAt: new Date('2026-07-11T05:00:00Z'),
     sourceUpdatedAt: new Date('2026-07-11T05:00:00Z'),
@@ -46,37 +46,66 @@ test('a new reset window can notify again', () => {
   assert.equal(notificationDecision(previous, event(82, '2026-07-11T15:00:00Z'), 10).notify, true);
 });
 
-test('expired event produces no_data and no notification', async (t) => {
+test('expired windows produce no_data and no notification', async (t) => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'usage-monitor-'));
   t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
   let notifications = 0;
   const config = { ...thresholds, dataDir, sessionDirs: [], targetWindowMinutes: 300 };
   const state = await runMonitor(config, {
     now: new Date('2026-07-11T11:00:00Z'),
-    findLatestRateLimit: async () => event(99, '2026-07-11T10:00:00Z'),
+    findLatestRateLimits: async () => ({ 300: event(99, '2026-07-11T10:00:00Z') }),
     notify: async () => { notifications += 1; },
   });
   assert.equal(state.status, 'no_data');
   assert.equal(state.usedPercent, null);
+  assert.equal(state.fiveHour.status, 'no_data');
+  assert.equal(state.weekly.status, 'no_data');
   assert.equal(notifications, 0);
 });
 
-test('runMonitor persists safe state and deduplicates notifications', async (t) => {
+test('runMonitor persists both windows and deduplicates them independently', async (t) => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'usage-monitor-'));
   t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
-  let notifications = 0;
+  const notifications = [];
   const config = { ...thresholds, dataDir, sessionDirs: [], targetWindowMinutes: 300 };
   const dependencies = {
     now: new Date('2026-07-11T06:00:00Z'),
-    findLatestRateLimit: async () => event(82),
-    notify: async () => { notifications += 1; },
+    findLatestRateLimits: async () => ({
+      300: event(82),
+      10080: event(34, '2026-07-18T10:00:00Z', 10080),
+    }),
+    notify: async (status, value, milestone, kind) => {
+      notifications.push({ status, milestone, kind });
+    },
   };
   await runMonitor(config, dependencies);
   await runMonitor(config, dependencies);
   const state = JSON.parse(await fs.readFile(path.join(dataDir, 'state.json'), 'utf8'));
-  assert.equal(notifications, 1);
+  assert.deepEqual(notifications, [
+    { status: 'severe', milestone: 80, kind: 'fiveHour' },
+    { status: 'ok', milestone: 30, kind: 'weekly' },
+  ]);
   assert.deepEqual(Object.keys(state), [
     'status', 'usedPercent', 'remainingPercent', 'windowMinutes',
-    'resetsAt', 'lastCheckedAt', 'sourceUpdatedAt',
+    'resetsAt', 'lastCheckedAt', 'sourceUpdatedAt', 'fiveHour', 'weekly',
   ]);
+  assert.equal(state.fiveHour.usedPercent, 82);
+  assert.equal(state.weekly.usedPercent, 34);
+});
+
+test('weekly status remains useful when the five-hour window is absent', async (t) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'usage-monitor-'));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  const config = { ...thresholds, dataDir, sessionDirs: [], targetWindowMinutes: 300 };
+  const state = await runMonitor(config, {
+    now: new Date('2026-07-11T06:00:00Z'),
+    findLatestRateLimits: async () => ({
+      10080: event(91, '2026-07-18T10:00:00Z', 10080),
+    }),
+    notify: async () => {},
+  });
+  assert.equal(state.status, 'critical');
+  assert.equal(state.usedPercent, null);
+  assert.equal(state.fiveHour.status, 'no_data');
+  assert.equal(state.weekly.status, 'critical');
 });

@@ -9,7 +9,7 @@ import { createMacNotifier } from './notifier.js';
 const projectDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 function usage() {
-  return 'Usage: codex-usage-monitor <run-once|test-alert [ok|severe|critical]|install|uninstall|status>';
+  return 'Usage: codex-usage-monitor <run-once|test-alert [ok|severe|critical] [fiveHour|weekly]|install|uninstall|status>';
 }
 
 export async function main(args) {
@@ -27,13 +27,15 @@ export async function main(args) {
   }
   if (command === 'test-alert') {
     const level = args[1] ?? 'ok';
-    if (!['ok', 'severe', 'critical'].includes(level)) throw new Error(usage());
+    const windowKind = args[2] ?? 'fiveHour';
+    if (!['ok', 'severe', 'critical'].includes(level)
+      || !['fiveHour', 'weekly'].includes(windowKind)) throw new Error(usage());
     const usedPercent = level === 'critical' ? 95 : level === 'severe' ? 85 : 50;
     await createMacNotifier(config)(level, {
       usedPercent,
       resetsAt: new Date(Date.now() + 60 * 60 * 1000),
-    }, Math.floor(usedPercent / 10) * 10);
-    console.log(`Displayed ${level} test alert.`);
+    }, Math.floor(usedPercent / 10) * 10, windowKind);
+    console.log(`Displayed ${level} ${windowKind} test alert.`);
     return;
   }
   if (command === 'uninstall') {

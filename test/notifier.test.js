@@ -30,6 +30,14 @@ test('critical bubble requires manual dismissal', () => {
   assert.match(presentation.en.title, /Allowance Critical/);
 });
 
+test('weekly presentation names the weekly window in both languages', () => {
+  const presentation = alertPresentation('ok', event(30), 30, 'weekly');
+  assert.match(presentation.zh.title, /周用量/);
+  assert.match(presentation.zh.message, /^本周/);
+  assert.match(presentation.en.title, /Weekly Usage/);
+  assert.match(presentation.en.message, /^Weekly usage/);
+});
+
 test('detects every Chinese locale variant and defaults others to English', () => {
   assert.equal(isChineseLanguage('zh-CN'), true);
   assert.equal(isChineseLanguage('zh-Hant-TW'), true);

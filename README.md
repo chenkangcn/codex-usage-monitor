@@ -1,8 +1,8 @@
-# Codex 五小时用量监控器 / Codex Five-Hour Usage Monitor (macOS)
+# Codex 用量监控器 / Codex Usage Monitor (macOS)
 
-一个无第三方依赖的本地 Node.js 小工具。它从 Codex 本地 JSONL 事件中寻找最新的五小时（300 分钟）限额记录，生成稳定的状态 JSON，并在用量每跨过 10% 时显示可手动关闭的 macOS 原生提醒气泡。
+一个无第三方依赖的本地 Node.js 小工具。它从 Codex 本地 JSONL 事件中寻找最新的五小时（300 分钟）和周（10080 分钟）限额记录，生成稳定的状态 JSON，并在任一窗口用量每跨过 10% 时显示可手动关闭的 macOS 原生提醒气泡。
 
-A dependency-free local Node.js utility. It finds the latest five-hour (300-minute) rate-limit record in Codex's local JSONL events, writes a stable JSON status file, and shows a dismissible native macOS alert bubble whenever usage crosses another 10% milestone.
+A dependency-free local Node.js utility. It finds the latest five-hour (300-minute) and weekly (10,080-minute) rate-limit records in Codex's local JSONL events, writes a stable JSON status file, and shows a dismissible native macOS alert bubble whenever either window crosses another 10% milestone.
 
 它不调用 OpenAI API，也不会消耗 Codex 用量。扫描时先用 `rate_limits` 文本预筛，只解析 `event_msg/token_count` 事件；不会保存或输出提示词、回复或其他会话正文。
 
@@ -10,8 +10,8 @@ It does not call the OpenAI API or consume Codex usage. The scanner first prefil
 
 ## 行为 / Behavior
 
-- 用量跨过 10%、20%、30%……100% 时分别通知；每个里程碑在同一窗口只通知一次。  
-  Notifications are sent at 10%, 20%, 30% … 100%; each milestone is sent only once per window.
+- 五小时和周限制分别在用量跨过 10%、20%、30%……100% 时通知；每个里程碑在各自的重置窗口中只通知一次。
+  Five-hour and weekly usage are tracked independently at 10%, 20%, 30% … 100%; each milestone is sent only once within its own reset window.
 - 如果一次检查跨过多个里程碑，只发送当前最高档的一条通知，避免通知轰炸。  
   If one check jumps across several milestones, only the current highest milestone is reported to avoid notification spam.
 - 剩余 `< 20%`（即使用量 `> 80%`）时进入 `severe` 并显示严重警告；剩余 `< 10%`（即使用量 `> 90%`）时进入 `critical` 并显示紧急警告。边界值 20% 和 10% 分别仍属于前一级。  
@@ -29,25 +29,41 @@ It does not call the OpenAI API or consume Codex usage. The scanner first prefil
 - 文件按 mtime 倒序检查，并从末尾反向分块查找。找到有效事件后可安全剪枝更旧文件，避免周期性全量读取大型会话目录。  
   Files are checked by descending mtime and read backward in chunks. Once a valid event is found, older files can be safely pruned, avoiding repeated full scans of large session directories.
 
-状态写到 `~/.codex/usage-monitor/state.json`，权限为当前用户可读写，字段固定如下：
+状态写到 `~/.codex/usage-monitor/state.json`，权限为当前用户可读写。顶层旧字段继续代表五小时窗口以保持兼容；`fiveHour` 和 `weekly` 提供两个窗口的完整状态。五小时限制暂时不出现时，其字段为 `null`，周状态仍正常更新：
 
-The status is written to `~/.codex/usage-monitor/state.json`, readable and writable only by the current user, with the following stable fields:
+The status is written to `~/.codex/usage-monitor/state.json`, readable and writable only by the current user. Legacy top-level fields continue to represent the five-hour window, while `fiveHour` and `weekly` contain complete per-window states. When the five-hour limit is temporarily absent, its fields are `null` and weekly status continues to update:
 
 ```json
 {
   "status": "ok",
-  "usedPercent": 63,
-  "remainingPercent": 37,
-  "windowMinutes": 300,
-  "resetsAt": "2026-07-11T11:47:12.000Z",
-  "lastCheckedAt": "2026-07-11T07:10:00.000Z",
-  "sourceUpdatedAt": "2026-07-11T07:09:32.000Z"
+  "usedPercent": null,
+  "remainingPercent": null,
+  "windowMinutes": null,
+  "resetsAt": null,
+  "lastCheckedAt": "2026-07-13T03:00:00.000Z",
+  "sourceUpdatedAt": "2026-07-13T02:56:37.673Z",
+  "fiveHour": {
+    "status": "no_data",
+    "usedPercent": null,
+    "remainingPercent": null,
+    "windowMinutes": null,
+    "resetsAt": null,
+    "sourceUpdatedAt": null
+  },
+  "weekly": {
+    "status": "ok",
+    "usedPercent": 7,
+    "remainingPercent": 93,
+    "windowMinutes": 10080,
+    "resetsAt": "2026-07-19T22:53:18.000Z",
+    "sourceUpdatedAt": "2026-07-13T02:56:37.673Z"
+  }
 }
 ```
 
-`status` 为 `ok`、`severe`、`critical` 或 `no_data`。没有有效数据时，限额相关字段为 `null`。该文件不包含源文件路径、会话 ID、模型输入或输出，可供其他本地工具读取。
+顶层 `status` 取两个有效窗口中较严重的状态，为 `ok`、`severe`、`critical` 或 `no_data`。没有有效数据时，对应窗口字段为 `null`。该文件不包含源文件路径、会话 ID、模型输入或输出，可供其他本地工具读取。
 
-`status` is one of `ok`, `severe`, `critical`, or `no_data`. Rate-limit fields are `null` when no valid data is available. The file contains no source path, session ID, model input, or model output and can be consumed by other local tools.
+Top-level `status` is the more severe state across the two valid windows and is one of `ok`, `severe`, `critical`, or `no_data`. Fields are `null` for a window with no valid data. The file contains no source path, session ID, model input, or model output and can be consumed by other local tools.
 
 ## 命令 / Commands
 
@@ -64,6 +80,7 @@ npm test
 npm run run-once
 /opt/homebrew/opt/node@22/bin/node bin/codex-usage-monitor.js status
 /opt/homebrew/opt/node@22/bin/node bin/codex-usage-monitor.js test-alert ok
+/opt/homebrew/opt/node@22/bin/node bin/codex-usage-monitor.js test-alert severe weekly
 ```
 
 安装 LaunchAgent。执行后会立即加载，并默认每 3 分钟运行一次：
@@ -142,6 +159,6 @@ The utility does not access the network, call the OpenAI API, or write conversat
 
 ## 兼容性说明 / Compatibility Notice
 
-Codex 本地事件格式不是官方稳定 API。Codex 升级后字段结构可能变化，届时需要适配解析器。当前实现兼容实测的 `payload.rate_limits.primary`，并保留对少数相近旧路径的读取兼容，但仍严格要求顶层 `event_msg` 和 `payload.type=token_count`。
+Codex 本地事件格式不是官方稳定 API。Codex 升级后字段结构可能变化，届时需要适配解析器。当前实现不依赖 `primary`/`secondary` 的固定含义，而是按 `window_minutes=300` 识别五小时窗口、按 `window_minutes=10080` 识别周窗口；因此同时兼容旧的一行双窗口格式和当前周限制位于 `primary`、`secondary=null` 的格式。解析仍严格要求顶层 `event_msg` 和 `payload.type=token_count`。
 
-Codex's local event format is not an officially stable API. Field structures may change after a Codex upgrade, in which case the parser may need to be adapted. The current implementation supports the observed `payload.rate_limits.primary` structure and retains compatibility with a few similar legacy paths, while still requiring a top-level `event_msg` and `payload.type=token_count`.
+Codex's local event format is not an officially stable API. Field structures may change after a Codex upgrade, in which case the parser may need to be adapted. The implementation does not assign fixed meanings to `primary` and `secondary`: it identifies the five-hour window by `window_minutes=300` and the weekly window by `window_minutes=10080`. This supports both the former dual-window event and the current shape where the weekly limit is in `primary` and `secondary=null`. A top-level `event_msg` and `payload.type=token_count` are still required.

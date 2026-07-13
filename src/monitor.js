@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { findLatestRateLimit } from './events.js';
+import { findLatestRateLimits } from './events.js';
 import { readInternalState, writeJsonAtomic } from './state.js';
 
 export function classifyUsage(usedPercent, config) {
@@ -24,42 +24,80 @@ export function notificationDecision(previous, event, alertStepPercent) {
   };
 }
 
-function publicState(event, status, now) {
+const windows = [
+  { kind: 'fiveHour', minutes: 300 },
+  { kind: 'weekly', minutes: 10080 },
+];
+
+function windowPublicState(event, config) {
+  const status = event ? classifyUsage(event.usedPercent, config) : 'no_data';
   return {
     status,
     usedPercent: event ? event.usedPercent : null,
     remainingPercent: event ? Math.max(0, 100 - event.usedPercent) : null,
     windowMinutes: event ? event.windowMinutes : null,
     resetsAt: event ? event.resetsAt.toISOString() : null,
-    lastCheckedAt: now.toISOString(),
     sourceUpdatedAt: event ? event.sourceUpdatedAt.toISOString() : null,
+  };
+}
+
+function publicState(limits, config, now) {
+  const fiveHour = windowPublicState(limits[300] ?? null, config);
+  const weekly = windowPublicState(limits[10080] ?? null, config);
+  const ranks = { no_data: 0, ok: 1, severe: 2, critical: 3 };
+  const status = ranks[weekly.status] > ranks[fiveHour.status] ? weekly.status : fiveHour.status;
+  const updatedDates = [fiveHour.sourceUpdatedAt, weekly.sourceUpdatedAt].filter(Boolean).sort();
+  return {
+    status,
+    usedPercent: fiveHour.usedPercent,
+    remainingPercent: fiveHour.remainingPercent,
+    windowMinutes: fiveHour.windowMinutes,
+    resetsAt: fiveHour.resetsAt,
+    lastCheckedAt: now.toISOString(),
+    sourceUpdatedAt: updatedDates.at(-1) ?? null,
+    fiveHour,
+    weekly,
   };
 }
 
 export async function runMonitor(config, dependencies = {}) {
   const now = dependencies.now ?? new Date();
-  const locate = dependencies.findLatestRateLimit ?? findLatestRateLimit;
+  const locate = dependencies.findLatestRateLimits ?? findLatestRateLimits;
   const notify = dependencies.notify ?? (async () => {});
   const statePath = path.join(config.dataDir, 'state.json');
   const internalPath = path.join(config.dataDir, '.notification-state.json');
-  const event = await locate(config.sessionDirs, { targetWindowMinutes: config.targetWindowMinutes });
-
-  if (!event || event.resetsAt <= now) {
-    const state = publicState(null, 'no_data', now);
-    await writeJsonAtomic(statePath, state);
-    await writeJsonAtomic(internalPath, {});
-    return state;
-  }
-
-  const status = classifyUsage(event.usedPercent, config);
-  const previous = await readInternalState(internalPath);
-  const decision = notificationDecision(previous, event, config.alertStepPercent);
-  const state = publicState(event, status, now);
+  const located = await locate(config.sessionDirs, { windowMinutes: [300, 10080], now });
+  const limits = Object.fromEntries(
+    Object.entries(located).filter(([, event]) => event?.resetsAt > now),
+  );
+  const state = publicState(limits, config, now);
   await writeJsonAtomic(statePath, state);
-  if (decision.notify) await notify(status, event, decision.milestone);
-  await writeJsonAtomic(internalPath, {
-    windowKey: event.resetsAt.toISOString(),
-    notifiedMilestones: decision.notifiedMilestones,
-  });
+  const previous = await readInternalState(internalPath);
+  const next = { windows: {} };
+  const pending = [];
+
+  for (const definition of windows) {
+    const event = limits[definition.minutes];
+    if (!event) continue;
+    const priorWindow = previous.windows?.[definition.kind]
+      ?? (definition.kind === 'fiveHour' ? previous : {});
+    const decision = notificationDecision(priorWindow, event, config.alertStepPercent);
+    next.windows[definition.kind] = {
+      windowKey: event.resetsAt.toISOString(),
+      notifiedMilestones: decision.notify
+        ? priorWindow.windowKey === event.resetsAt.toISOString()
+          ? (priorWindow.notifiedMilestones ?? [])
+          : []
+        : decision.notifiedMilestones,
+    };
+    if (decision.notify) pending.push({ definition, event, decision });
+  }
+  for (const { definition, event, decision } of pending) {
+    const status = classifyUsage(event.usedPercent, config);
+    await notify(status, event, decision.milestone, definition.kind);
+    next.windows[definition.kind].notifiedMilestones = decision.notifiedMilestones;
+    await writeJsonAtomic(internalPath, next);
+  }
+  await writeJsonAtomic(internalPath, next);
   return state;
 }
