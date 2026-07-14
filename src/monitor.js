@@ -3,8 +3,8 @@ import { findLatestRateLimits } from './events.js';
 import { readInternalState, writeJsonAtomic } from './state.js';
 
 export function classifyUsage(usedPercent, config) {
-  if (usedPercent > config.criticalThreshold) return 'critical';
-  if (usedPercent > config.severeThreshold) return 'severe';
+  if (usedPercent >= config.criticalThreshold) return 'critical';
+  if (usedPercent >= config.severeThreshold) return 'severe';
   return 'ok';
 }
 

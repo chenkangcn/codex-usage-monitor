@@ -17,10 +17,12 @@ function event(usedPercent, reset = '2026-07-11T10:00:00Z', windowMinutes = 300)
   };
 }
 
-test('classifies severe and critical levels by strictly lower remaining allowance', () => {
-  assert.equal(classifyUsage(80, thresholds), 'ok');
+test('classifies severe and critical levels at inclusive remaining-allowance boundaries', () => {
+  assert.equal(classifyUsage(79.9, thresholds), 'ok');
+  assert.equal(classifyUsage(80, thresholds), 'severe');
   assert.equal(classifyUsage(80.1, thresholds), 'severe');
-  assert.equal(classifyUsage(90, thresholds), 'severe');
+  assert.equal(classifyUsage(89.9, thresholds), 'severe');
+  assert.equal(classifyUsage(90, thresholds), 'critical');
   assert.equal(classifyUsage(90.1, thresholds), 'critical');
 });
 

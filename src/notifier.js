@@ -19,7 +19,7 @@ export function alertPresentation(level, event, milestone, windowKind = 'fiveHou
   const remainingText = remaining.toFixed(1);
   const messageZh = `${isWeekly ? '本周' : '五小时窗口'}已使用 ${used}%（跨过 ${milestone}%），剩余约 ${remainingText}%，将在 ${event.resetsAt.toLocaleString('zh-CN')} 重置。`;
   const messageEn = `${isWeekly ? 'Weekly' : 'Five-hour'} usage is ${used}% (crossed ${milestone}%), about ${remainingText}% remains, and the window resets at ${event.resetsAt.toLocaleString('en-US')}.`;
-  const durationSeconds = level === 'critical' ? 0 : level === 'severe' ? 20 : 5;
+  const durationSeconds = level === 'critical' ? 0 : level === 'severe' ? 20 : 10;
   return {
     zh: { title: titleZh, message: messageZh },
     en: { title: titleEn, message: messageEn },

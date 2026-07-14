@@ -9,9 +9,9 @@ function event(usedPercent) {
   };
 }
 
-test('ordinary milestone bubble lasts five seconds', () => {
+test('ordinary milestone bubble lasts ten seconds', () => {
   const presentation = alertPresentation('ok', event(50), 50);
-  assert.equal(presentation.durationSeconds, 5);
+  assert.equal(presentation.durationSeconds, 10);
   assert.match(presentation.zh.title, /用量提醒/);
   assert.match(presentation.en.title, /Five-Hour Usage/);
 });
@@ -21,6 +21,11 @@ test('severe bubble lasts twenty seconds', () => {
   assert.equal(presentation.durationSeconds, 20);
   assert.match(presentation.zh.title, /严重不足/);
   assert.match(presentation.en.title, /Allowance Low/);
+});
+
+test('exactly twenty percent remaining uses the severe twenty-second presentation', () => {
+  const presentation = alertPresentation('severe', event(80), 80);
+  assert.equal(presentation.durationSeconds, 20);
 });
 
 test('critical bubble requires manual dismissal', () => {
