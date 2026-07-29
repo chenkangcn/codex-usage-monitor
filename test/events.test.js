@@ -88,3 +88,42 @@ test('drops expired windows without failing the other window', async (t) => {
   assert.equal(latest[300], undefined);
   assert.equal(latest[10080].usedPercent, 40);
 });
+
+test('prefers a later reset window over a more recently written stale session', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'usage-events-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const current = path.join(root, 'current.jsonl');
+  const stale = path.join(root, 'stale.jsonl');
+  await fs.writeFile(current, tokenEvent(
+    '2026-07-29T22:30:00Z',
+    limit(1, 10080, '2026-08-05T22:30:00Z'),
+  ));
+  await fs.writeFile(stale, tokenEvent(
+    '2026-07-29T22:34:00Z',
+    limit(100, 10080, '2026-08-05T04:18:27Z'),
+  ));
+  await fs.utimes(current, new Date('2026-07-29T22:30:01Z'), new Date('2026-07-29T22:30:01Z'));
+  await fs.utimes(stale, new Date('2026-07-29T22:34:01Z'), new Date('2026-07-29T22:34:01Z'));
+
+  const latest = await findLatestRateLimits([root], {
+    now: new Date('2026-07-29T22:35:00Z'),
+  });
+  assert.equal(latest[10080].usedPercent, 1);
+  assert.equal(latest[10080].resetsAt.toISOString(), '2026-08-05T22:30:00.000Z');
+});
+
+test('uses event time when reset timestamps only drift by a few minutes', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'usage-events-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await fs.writeFile(path.join(root, 'one.jsonl'), [
+    tokenEvent('2026-07-29T22:30:00Z', limit(1, 10080, '2026-08-05T22:33:00Z')),
+    tokenEvent('2026-07-29T22:31:00Z', limit(2, 10080, '2026-08-05T22:30:00Z')),
+  ].join('\n'));
+  const fileTime = new Date('2026-07-29T22:31:01Z');
+  await fs.utimes(path.join(root, 'one.jsonl'), fileTime, fileTime);
+
+  const latest = await findLatestRateLimits([root], {
+    now: new Date('2026-07-29T22:32:00Z'),
+  });
+  assert.equal(latest[10080].usedPercent, 2);
+});

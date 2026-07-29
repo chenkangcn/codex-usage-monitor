@@ -1,6 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
+const RESET_TIME_TOLERANCE_MS = 5 * 60_000;
+
 function asDate(value) {
   if (typeof value === 'number') {
     const millis = value < 10_000_000_000 ? value * 1000 : value;
@@ -135,15 +137,23 @@ export async function findLatestRateLimits(sessionDirs, options = {}) {
   const now = options.now ?? new Date();
   const latest = {};
   for (const file of files) {
-    const needed = targets.filter((minutes) => {
-      if (file.mtime <= new Date(now.valueOf() - minutes * 60_000)) return false;
-      return !latest[minutes] || file.mtime > latest[minutes].eventAt;
-    });
+    const needed = targets.filter(
+      (minutes) => file.mtime > new Date(now.valueOf() - minutes * 60_000),
+    );
     if (needed.length === 0) continue;
     const candidates = await latestRateLimitsInFile(file, { ...options, windowMinutes: needed, now });
     for (const minutes of needed) {
       const candidate = candidates[minutes];
-      if (candidate && (!latest[minutes] || candidate.eventAt > latest[minutes].eventAt)) {
+      const current = latest[minutes];
+      if (!candidate) continue;
+      const resetDifference = candidate.resetsAt - (current?.resetsAt ?? candidate.resetsAt);
+      const isNewerLogicalWindow = current
+        && Math.abs(resetDifference) > RESET_TIME_TOLERANCE_MS
+        && resetDifference > 0;
+      const isNewerEventInSameWindow = !current
+        || (Math.abs(resetDifference) <= RESET_TIME_TOLERANCE_MS
+          && candidate.eventAt > current.eventAt);
+      if (isNewerLogicalWindow || isNewerEventInSameWindow) {
         latest[minutes] = candidate;
       }
     }

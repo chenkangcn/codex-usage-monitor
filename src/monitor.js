@@ -2,15 +2,26 @@ import path from 'node:path';
 import { findLatestRateLimits } from './events.js';
 import { readInternalState, writeJsonAtomic } from './state.js';
 
+const RESET_TIME_TOLERANCE_MS = 5 * 60_000;
+const MAX_WINDOW_HISTORY = 8;
+
 export function classifyUsage(usedPercent, config) {
   if (usedPercent >= config.criticalThreshold) return 'critical';
   if (usedPercent >= config.severeThreshold) return 'severe';
   return 'ok';
 }
 
+function sameResetWindow(windowKey, resetsAt) {
+  if (!windowKey) return false;
+  const storedReset = new Date(windowKey);
+  return !Number.isNaN(storedReset.valueOf())
+    && Math.abs(storedReset - resetsAt) <= RESET_TIME_TOLERANCE_MS;
+}
+
 export function notificationDecision(previous, event, alertStepPercent) {
   const key = event.resetsAt.toISOString();
-  const milestones = previous.windowKey === key && Array.isArray(previous.notifiedMilestones)
+  const milestones = sameResetWindow(previous.windowKey, event.resetsAt)
+    && Array.isArray(previous.notifiedMilestones)
     ? previous.notifiedMilestones
     : [];
   const milestone = Math.min(100, Math.floor(event.usedPercent / alertStepPercent) * alertStepPercent);
@@ -22,6 +33,52 @@ export function notificationDecision(previous, event, alertStepPercent) {
     milestone,
     notifiedMilestones: [...milestones, milestone].sort((a, b) => a - b),
   };
+}
+
+function storedWindowHistory(stored) {
+  const entries = Array.isArray(stored?.history) ? stored.history : [];
+  const legacy = stored?.windowKey
+    ? [{ windowKey: stored.windowKey, notifiedMilestones: stored.notifiedMilestones }]
+    : [];
+  const history = [];
+  for (const entry of [...legacy, ...entries]) {
+    if (!entry?.windowKey || !Array.isArray(entry.notifiedMilestones)) continue;
+    const existing = history.find(
+      (candidate) => sameResetWindow(candidate.windowKey, new Date(entry.windowKey)),
+    );
+    if (existing) {
+      existing.notifiedMilestones = [...new Set([
+        ...existing.notifiedMilestones,
+        ...entry.notifiedMilestones,
+      ])].sort((a, b) => a - b);
+    } else {
+      history.push({
+        windowKey: entry.windowKey,
+        notifiedMilestones: [...entry.notifiedMilestones],
+      });
+    }
+  }
+  return history;
+}
+
+function priorWindowForEvent(stored, event) {
+  return storedWindowHistory(stored).find(
+    (entry) => sameResetWindow(entry.windowKey, event.resetsAt),
+  ) ?? {};
+}
+
+function updatedWindowState(stored, event, notifiedMilestones) {
+  const current = {
+    windowKey: event.resetsAt.toISOString(),
+    notifiedMilestones,
+  };
+  const history = [
+    current,
+    ...storedWindowHistory(stored).filter(
+      (entry) => !sameResetWindow(entry.windowKey, event.resetsAt),
+    ),
+  ].slice(0, MAX_WINDOW_HISTORY);
+  return { ...current, history };
 }
 
 const windows = [
@@ -79,23 +136,28 @@ export async function runMonitor(config, dependencies = {}) {
   for (const definition of windows) {
     const event = limits[definition.minutes];
     if (!event) continue;
-    const priorWindow = previous.windows?.[definition.kind]
+    const storedWindow = previous.windows?.[definition.kind]
       ?? (definition.kind === 'fiveHour' ? previous : {});
+    const priorWindow = priorWindowForEvent(storedWindow, event);
     const decision = notificationDecision(priorWindow, event, config.alertStepPercent);
-    next.windows[definition.kind] = {
-      windowKey: event.resetsAt.toISOString(),
-      notifiedMilestones: decision.notify
-        ? priorWindow.windowKey === event.resetsAt.toISOString()
-          ? (priorWindow.notifiedMilestones ?? [])
-          : []
-        : decision.notifiedMilestones,
-    };
+    const milestones = decision.notify
+      ? (priorWindow.notifiedMilestones ?? [])
+      : decision.notifiedMilestones;
+    next.windows[definition.kind] = updatedWindowState(
+      storedWindow,
+      event,
+      milestones,
+    );
     if (decision.notify) pending.push({ definition, event, decision });
   }
   for (const { definition, event, decision } of pending) {
     const status = classifyUsage(event.usedPercent, config);
     await notify(status, event, decision.milestone, definition.kind);
-    next.windows[definition.kind].notifiedMilestones = decision.notifiedMilestones;
+    next.windows[definition.kind] = updatedWindowState(
+      next.windows[definition.kind],
+      event,
+      decision.notifiedMilestones,
+    );
     await writeJsonAtomic(internalPath, next);
   }
   await writeJsonAtomic(internalPath, next);
