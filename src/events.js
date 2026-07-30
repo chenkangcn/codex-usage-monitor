@@ -1,8 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-const RESET_TIME_TOLERANCE_MS = 5 * 60_000;
-
 function asDate(value) {
   if (typeof value === 'number') {
     const millis = value < 10_000_000_000 ? value * 1000 : value;
@@ -24,6 +22,27 @@ function rateLimitsFromEvent(event) {
     event?.rate_limits,
   ];
   return candidates.find((value) => value && typeof value === 'object') ?? null;
+}
+
+async function sessionStartedAt(filePath, fallback) {
+  const handle = await fs.open(filePath, 'r');
+  try {
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    for (const line of buffer.subarray(0, bytesRead).toString('utf8').split('\n')) {
+      let event;
+      try {
+        event = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      const timestamp = asDate(event?.timestamp ?? event?.created_at ?? event?.time);
+      if (timestamp) return timestamp;
+    }
+    return fallback;
+  } finally {
+    await handle.close();
+  }
 }
 
 export function parseRateLimitLine(line, source = {}) {
@@ -56,6 +75,7 @@ export function parseRateLimitLine(line, source = {}) {
       resetsAt,
       eventAt,
       sourceUpdatedAt: eventAt,
+      sourceStartedAt: source.startedAt ?? source.birthtime ?? eventAt,
     });
   }
   return limits.length > 0 ? { eventAt, sourceUpdatedAt: eventAt, limits } : null;
@@ -76,7 +96,13 @@ async function findJsonlFiles(dir) {
       if (entry.isDirectory()) await visit(fullPath);
       else if (entry.isFile() && entry.name.endsWith('.jsonl')) {
         const stat = await fs.stat(fullPath);
-        results.push({ path: fullPath, mtime: stat.mtime, size: stat.size });
+        results.push({
+          path: fullPath,
+          mtime: stat.mtime,
+          birthtime: stat.birthtime,
+          startedAt: await sessionStartedAt(fullPath, stat.birthtime),
+          size: stat.size,
+        });
       }
     }
   }
@@ -146,14 +172,12 @@ export async function findLatestRateLimits(sessionDirs, options = {}) {
       const candidate = candidates[minutes];
       const current = latest[minutes];
       if (!candidate) continue;
-      const resetDifference = candidate.resetsAt - (current?.resetsAt ?? candidate.resetsAt);
-      const isNewerLogicalWindow = current
-        && Math.abs(resetDifference) > RESET_TIME_TOLERANCE_MS
-        && resetDifference > 0;
-      const isNewerEventInSameWindow = !current
-        || (Math.abs(resetDifference) <= RESET_TIME_TOLERANCE_MS
-          && candidate.eventAt > current.eventAt);
-      if (isNewerLogicalWindow || isNewerEventInSameWindow) {
+      const sourceDifference = candidate.sourceStartedAt
+        - (current?.sourceStartedAt ?? candidate.sourceStartedAt);
+      const isNewerSession = current && sourceDifference > 0;
+      const isNewerEventInSameSession = !current
+        || (sourceDifference === 0 && candidate.eventAt > current.eventAt);
+      if (isNewerSession || isNewerEventInSameSession) {
         latest[minutes] = candidate;
       }
     }

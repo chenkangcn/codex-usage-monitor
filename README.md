@@ -28,8 +28,8 @@ It does not call the OpenAI API or consume Codex usage. The scanner first prefil
   Both `~/.codex/sessions` and `~/.codex/archived_sessions` are scanned; backup files that do not end in `.jsonl` are ignored.
 - 文件按 mtime 倒序检查，并从末尾反向分块查找；只检查目标窗口时长内更新过的文件，避免周期性全量读取大型会话目录。
   Files are checked by descending mtime and read backward in chunks. Only files updated within the target window duration are considered, avoiding periodic full reads of large session directories.
-- 多个仍在运行的 Codex 会话若同时写入不同的有效窗口，监控器优先采用较新的重置边界，避免登录切换后被旧会话的延迟事件覆盖；几分钟内的 `resets_at` 漂移视为同一窗口，最近窗口的去重历史会被保留。
-  If multiple live Codex sessions write different valid windows concurrently, the monitor prefers the later reset boundary so delayed events from a pre-login session cannot replace the refreshed window. Small `resets_at` drift is treated as the same window, and recent deduplication history is retained.
+- 多个仍在运行的 Codex 会话若同时写入不同的有效窗口，监控器优先采用最新启动会话中的限额，避免登录切换后被旧会话的延迟事件覆盖；几分钟内的 `resets_at` 漂移视为同一窗口，最近窗口的去重历史会被保留。
+  If multiple live Codex sessions write different valid windows concurrently, the monitor prefers the limit from the most recently started session so delayed events from a pre-login session cannot replace it. Small `resets_at` drift is treated as the same window, and recent deduplication history is retained.
 
 状态写到 `~/.codex/usage-monitor/state.json`，权限为当前用户可读写。顶层旧字段继续代表五小时窗口以保持兼容；`fiveHour` 和 `weekly` 提供两个窗口的完整状态。五小时限制暂时不出现时，其字段为 `null`，周状态仍正常更新：
 
