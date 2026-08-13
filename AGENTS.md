@@ -1,5 +1,12 @@
 # AI Agent Guide
 
+## ECS Deployment Authorization Gate
+
+- Never deploy or release any modification to Alibaba Cloud ECS unless the user gives an explicit deployment or release instruction for the exact project and candidate in the current conversation.
+- A bug report, fix request, implementation approval, completed AI verification, passing tests or builds, commit, push, pull request, read-only production investigation, or SSH approval does not authorize deployment.
+- Without that explicit instruction, stop after the normal code-verification and GitHub-publication steps, hand the candidate back to the user for their own testing, and wait. Do not treat AI-run checks as the user's acceptance test.
+- Even after the user reports that their testing passed, do not deploy until they explicitly instruct deployment. If they explicitly instruct deployment, re-verify the exact target, commit, checks, rollback path, and repository-specific deployment source of truth before changing ECS.
+
 ## AI Completion and Publication Rules
 
 <!-- ai-completion-and-publication-rules:v1 -->
