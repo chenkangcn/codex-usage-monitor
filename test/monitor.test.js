@@ -37,6 +37,32 @@ test('notifies once at every observed 10 percent milestone', () => {
   assert.equal(next.milestone, 20);
 });
 
+test('adds independent milestones at five percent and zero remaining', () => {
+  const reset = event(95).resetsAt.toISOString();
+  const atFiveRemaining = notificationDecision(
+    { windowKey: reset, notifiedMilestones: [10, 20, 30, 40, 50, 60, 70, 80, 90] },
+    event(95),
+    10,
+  );
+  assert.equal(atFiveRemaining.notify, true);
+  assert.equal(atFiveRemaining.milestone, 95);
+
+  const repeated = notificationDecision(
+    { windowKey: reset, notifiedMilestones: atFiveRemaining.notifiedMilestones },
+    event(99),
+    10,
+  );
+  assert.equal(repeated.notify, false);
+
+  const exhausted = notificationDecision(
+    { windowKey: reset, notifiedMilestones: atFiveRemaining.notifiedMilestones },
+    event(100),
+    10,
+  );
+  assert.equal(exhausted.notify, true);
+  assert.equal(exhausted.milestone, 100);
+});
+
 test('a jump across milestones sends only the current highest milestone', () => {
   const decision = notificationDecision({}, event(37), 10);
   assert.equal(decision.milestone, 30);
@@ -46,6 +72,13 @@ test('a jump across milestones sends only the current highest milestone', () => 
 test('a new reset window can notify again', () => {
   const previous = { windowKey: '2026-07-11T10:00:00.000Z', notifiedMilestones: [80] };
   assert.equal(notificationDecision(previous, event(82, '2026-07-11T15:00:00Z'), 10).notify, true);
+});
+
+test('small reset timestamp drift does not repeat a milestone', () => {
+  const previous = { windowKey: '2026-07-11T10:00:00.000Z', notifiedMilestones: [10] };
+  const decision = notificationDecision(previous, event(19, '2026-07-11T10:03:00Z'), 10);
+  assert.equal(decision.notify, false);
+  assert.deepEqual(decision.notifiedMilestones, [10]);
 });
 
 test('expired windows produce no_data and no notification', async (t) => {
@@ -110,4 +143,33 @@ test('weekly status remains useful when the five-hour window is absent', async (
   assert.equal(state.usedPercent, null);
   assert.equal(state.fiveHour.status, 'no_data');
   assert.equal(state.weekly.status, 'critical');
+});
+
+test('returning to a previously seen window does not repeat its milestone', async (t) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'usage-monitor-'));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  const config = { ...thresholds, dataDir, sessionDirs: [], targetWindowMinutes: 300 };
+  const oldWindow = event(100, '2026-07-18T04:18:27Z', 10080);
+  const newWindow = event(1, '2026-07-18T22:30:00Z', 10080);
+  const sequence = [oldWindow, newWindow, oldWindow];
+  const notifications = [];
+  const dependencies = {
+    now: new Date('2026-07-11T06:00:00Z'),
+    findLatestRateLimits: async () => ({ 10080: sequence.shift() }),
+    notify: async (status, value, milestone, kind) => {
+      notifications.push({ status, milestone, kind });
+    },
+  };
+
+  await runMonitor(config, dependencies);
+  await runMonitor(config, dependencies);
+  await runMonitor(config, dependencies);
+
+  assert.deepEqual(notifications, [
+    { status: 'critical', milestone: 100, kind: 'weekly' },
+  ]);
+  const internal = JSON.parse(
+    await fs.readFile(path.join(dataDir, '.notification-state.json'), 'utf8'),
+  );
+  assert.equal(internal.windows.weekly.history.length, 2);
 });

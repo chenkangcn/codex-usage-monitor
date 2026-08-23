@@ -24,6 +24,27 @@ function rateLimitsFromEvent(event) {
   return candidates.find((value) => value && typeof value === 'object') ?? null;
 }
 
+async function sessionStartedAt(filePath, fallback) {
+  const handle = await fs.open(filePath, 'r');
+  try {
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    for (const line of buffer.subarray(0, bytesRead).toString('utf8').split('\n')) {
+      let event;
+      try {
+        event = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      const timestamp = asDate(event?.timestamp ?? event?.created_at ?? event?.time);
+      if (timestamp) return timestamp;
+    }
+    return fallback;
+  } finally {
+    await handle.close();
+  }
+}
+
 export function parseRateLimitLine(line, source = {}) {
   if (!line.includes('rate_limits')) return null;
   let event;
@@ -54,6 +75,7 @@ export function parseRateLimitLine(line, source = {}) {
       resetsAt,
       eventAt,
       sourceUpdatedAt: eventAt,
+      sourceStartedAt: source.startedAt ?? source.birthtime ?? eventAt,
     });
   }
   return limits.length > 0 ? { eventAt, sourceUpdatedAt: eventAt, limits } : null;
@@ -74,7 +96,13 @@ async function findJsonlFiles(dir) {
       if (entry.isDirectory()) await visit(fullPath);
       else if (entry.isFile() && entry.name.endsWith('.jsonl')) {
         const stat = await fs.stat(fullPath);
-        results.push({ path: fullPath, mtime: stat.mtime, size: stat.size });
+        results.push({
+          path: fullPath,
+          mtime: stat.mtime,
+          birthtime: stat.birthtime,
+          startedAt: await sessionStartedAt(fullPath, stat.birthtime),
+          size: stat.size,
+        });
       }
     }
   }
@@ -135,15 +163,21 @@ export async function findLatestRateLimits(sessionDirs, options = {}) {
   const now = options.now ?? new Date();
   const latest = {};
   for (const file of files) {
-    const needed = targets.filter((minutes) => {
-      if (file.mtime <= new Date(now.valueOf() - minutes * 60_000)) return false;
-      return !latest[minutes] || file.mtime > latest[minutes].eventAt;
-    });
+    const needed = targets.filter(
+      (minutes) => file.mtime > new Date(now.valueOf() - minutes * 60_000),
+    );
     if (needed.length === 0) continue;
     const candidates = await latestRateLimitsInFile(file, { ...options, windowMinutes: needed, now });
     for (const minutes of needed) {
       const candidate = candidates[minutes];
-      if (candidate && (!latest[minutes] || candidate.eventAt > latest[minutes].eventAt)) {
+      const current = latest[minutes];
+      if (!candidate) continue;
+      const sourceDifference = candidate.sourceStartedAt
+        - (current?.sourceStartedAt ?? candidate.sourceStartedAt);
+      const isNewerSession = current && sourceDifference > 0;
+      const isNewerEventInSameSession = !current
+        || (sourceDifference === 0 && candidate.eventAt > current.eventAt);
+      if (isNewerSession || isNewerEventInSameSession) {
         latest[minutes] = candidate;
       }
     }
