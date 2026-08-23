@@ -35,6 +35,11 @@ test('critical bubble requires manual dismissal', () => {
   assert.match(presentation.en.title, /Allowance Critical/);
 });
 
+test('five percent and zero remaining always require manual dismissal', () => {
+  assert.equal(alertPresentation('ok', event(95), 95).durationSeconds, 0);
+  assert.equal(alertPresentation('ok', event(100), 100).durationSeconds, 0);
+});
+
 test('weekly presentation names the weekly window in both languages', () => {
   const presentation = alertPresentation('ok', event(30), 30, 'weekly');
   assert.match(presentation.zh.title, /周用量/);

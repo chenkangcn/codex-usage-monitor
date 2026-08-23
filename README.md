@@ -10,14 +10,14 @@ It does not call the OpenAI API or consume Codex usage. The scanner first prefil
 
 ## 行为 / Behavior
 
-- 五小时和周限制分别在用量跨过 10%、20%、30%……100% 时通知；每个里程碑在各自的重置窗口中只通知一次。
-  Five-hour and weekly usage are tracked independently at 10%, 20%, 30% … 100%; each milestone is sent only once within its own reset window.
+- 五小时和周限制分别在用量跨过 10%、20%、30%……90%、95% 和 100% 时通知；其中 95% 表示剩余 5%，100% 表示剩余 0%。每个里程碑在各自的重置窗口中只通知一次。
+  Five-hour and weekly usage are tracked independently at 10%, 20%, 30% … 90%, 95%, and 100%. The final two milestones mean 5% and 0% remaining. Each milestone is sent only once within its own reset window.
 - 如果一次检查跨过多个里程碑，只发送当前最高档的一条通知，避免通知轰炸。  
   If one check jumps across several milestones, only the current highest milestone is reported to avoid notification spam.
 - 剩余 `<= 20%`（即使用量 `>= 80%`）时进入 `severe` 并显示严重警告；剩余 `<= 10%`（即使用量 `>= 90%`）时进入 `critical` 并显示紧急警告。
   When remaining allowance is `<= 20%` (usage `>= 80%`), status becomes `severe`; at `<= 10%` (usage `>= 90%`), it becomes `critical`.
-- 普通气泡显示 10 秒，严重气泡显示 20 秒，两者均可提前手动关闭；紧急气泡保持显示，直到用户关闭。
-  Ordinary bubbles remain for 10 seconds and severe bubbles for 20 seconds; both can be dismissed early. Critical bubbles remain until manually dismissed.
+- 普通气泡显示 10 秒，严重气泡显示 20 秒，两者均可提前手动关闭；紧急气泡以及剩余 5% 和 0% 两档提醒会保持显示，直到用户关闭。
+  Ordinary bubbles remain for 10 seconds and severe bubbles for 20 seconds; both can be dismissed early. Critical bubbles and the alerts at 5% and 0% remaining stay visible until manually dismissed.
 - Helper 直接读取 macOS 首选语言：中文系统显示中文，其他语言显示英文；标题、正文、按钮、倒计时和重置时间会一起切换。
   The helper reads the preferred macOS language directly: Chinese systems use Chinese and all other languages use English. Titles, messages, buttons, countdowns, and reset times switch together.
 - 去重窗口键是 `resets_at`。新窗口出现后会重新允许各个里程碑通知。  

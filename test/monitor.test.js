@@ -37,6 +37,32 @@ test('notifies once at every observed 10 percent milestone', () => {
   assert.equal(next.milestone, 20);
 });
 
+test('adds independent milestones at five percent and zero remaining', () => {
+  const reset = event(95).resetsAt.toISOString();
+  const atFiveRemaining = notificationDecision(
+    { windowKey: reset, notifiedMilestones: [10, 20, 30, 40, 50, 60, 70, 80, 90] },
+    event(95),
+    10,
+  );
+  assert.equal(atFiveRemaining.notify, true);
+  assert.equal(atFiveRemaining.milestone, 95);
+
+  const repeated = notificationDecision(
+    { windowKey: reset, notifiedMilestones: atFiveRemaining.notifiedMilestones },
+    event(99),
+    10,
+  );
+  assert.equal(repeated.notify, false);
+
+  const exhausted = notificationDecision(
+    { windowKey: reset, notifiedMilestones: atFiveRemaining.notifiedMilestones },
+    event(100),
+    10,
+  );
+  assert.equal(exhausted.notify, true);
+  assert.equal(exhausted.milestone, 100);
+});
+
 test('a jump across milestones sends only the current highest milestone', () => {
   const decision = notificationDecision({}, event(37), 10);
   assert.equal(decision.milestone, 30);

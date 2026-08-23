@@ -4,6 +4,7 @@ import { readInternalState, writeJsonAtomic } from './state.js';
 
 const RESET_TIME_TOLERANCE_MS = 5 * 60_000;
 const MAX_WINDOW_HISTORY = 8;
+const FINAL_MILESTONES = [95, 100];
 
 export function classifyUsage(usedPercent, config) {
   if (usedPercent >= config.criticalThreshold) return 'critical';
@@ -24,7 +25,14 @@ export function notificationDecision(previous, event, alertStepPercent) {
     && Array.isArray(previous.notifiedMilestones)
     ? previous.notifiedMilestones
     : [];
-  const milestone = Math.min(100, Math.floor(event.usedPercent / alertStepPercent) * alertStepPercent);
+  const regularMilestone = Math.min(
+    100,
+    Math.floor(event.usedPercent / alertStepPercent) * alertStepPercent,
+  );
+  const milestone = Math.max(
+    regularMilestone,
+    ...FINAL_MILESTONES.filter((value) => event.usedPercent >= value),
+  );
   if (milestone < alertStepPercent || milestones.includes(milestone)) {
     return { notify: false, milestone: null, notifiedMilestones: milestones };
   }
